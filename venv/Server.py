@@ -1,4 +1,4 @@
-import socket
+import socket, sys
 import SplitBesked
 
 '''UDPserversocket laves her og serveren venter på klienten.
@@ -23,9 +23,11 @@ taeller = 0
    adressen til klientens socket (gemt i en ny tuple)'''
 
 def modtag():
+
     print("Venter på klientens besked i IP-adressen {} ved porten {} ".format(*adressen))
     beskedFraKlienten = serverSocket.recvfrom(bufferStoerrelse)
     return beskedFraKlienten
+
 
 '''Denne funktion laver en handshake. Den bruger funktionen slitBeskeden() til at fordele
    beskeden i forskellige elementer gemt i en tuple. 
@@ -59,7 +61,14 @@ def handshake():
                     return True
                     break
             else:
-               serverSocket.close()
+                print("S: Fejl i handshake")
+                svarTilMsg = "FEJL"
+                sendTilKlient = str.encode(svarTilMsg)
+                serverSocket.sendto(sendTilKlient, infoTuble[3])
+
+                if (ConnectionError):
+                    serverSocket.close()
+                    sys.exit(0)
 
 '''
    Denne funktion håndterer beskeder, som klienten sender (efter handshake). 
@@ -74,6 +83,7 @@ def handshake():
 def modTageBeskeder():
         while (True):
             beskedFraKlienten = modtag()
+
             if (beskedFraKlienten):
                 infoTuble = SplitBesked.splitBeskeden(beskedFraKlienten, "=", "C: ");
 
@@ -82,6 +92,7 @@ def modTageBeskeder():
 
                 else:
                     svarTilMsg(False, infoTuble[3])
+
 
 '''Her sender vi svar til klienten afhængig af, om modtageBeskeder() modtog en 
    besked, som overholder protokollen eller ej. 
@@ -100,22 +111,27 @@ def svarTilMsg(bool, klientAdresse):
         svarTilMsg = "res-" + str(taeller+1) + "=Jeg er serveren"
         sendTilKlient = str.encode(svarTilMsg)
         taeller = taeller + 2
-        print(type(klientAdresse))
-        print(klientAdresse)
         serverSocket.sendto(sendTilKlient, klientAdresse);
 
     else:
+
         print("S: Fejl i beskeden")
         svarTilMsg = "FEJL"
         sendTilKlient = str.encode(svarTilMsg)
         serverSocket.sendto(sendTilKlient, klientAdresse)
 
+        if (ConnectionError):
+            serverSocket.close()
+            sys.exit(0)
+
 '''
    Her kalder jeg på funktionerne, dvs. hvis handshake er
    gået vel, begynder serveren at modtage beskeder fra klienten'''
 
+
 if(handshake()):
-    modTageBeskeder()
+   modTageBeskeder()
+
 
 
 
