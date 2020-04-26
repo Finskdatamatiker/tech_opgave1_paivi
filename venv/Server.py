@@ -1,13 +1,13 @@
 import socket, sys
 import SplitBesked
+import threading
+import time
+from threading import Thread
 
-'''UDPserversocket laves her og serveren venter på klienten.
-   AF_INET er en tuple med IP-adresse og port. 
-   SOCK_DGRAM refererer til socket-typen datagram, som pakkerne hedder i UDP.
-   serverSocket bindes til adressen.
-   buffetSøttelse er max 8192, dvs. man kan kun sende en bestemt mængde data ad gangen gennem UDP
-   Taeller indekserer beskederne og begynder med 0.  
-   '''
+
+''' UDP-socket (SOCK_DGRAM er datagram-baseret) for serveren. 
+    AF_INET indikerer typer af adresser, som socket er i stand til at kommunikere med.
+    localhost, bufferSøttelse er max 8192'''
 
 serverSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
 serverIP = "127.0.0.1"
@@ -15,122 +15,225 @@ serverPort = 3030
 adressen = (serverIP, serverPort)
 serverSocket.bind(adressen)
 bufferStoerrelse = 4096
-taeller = 0
 
-'''Denne funktion returnerer en besked, som socket har modtaget. 
-   I format() kan jeg vælge alle elementer i tuplen med * i stedet for at skrive adressen[0],adressen[1])
-   recvfrom() returnerer en tuple, hvor det første element er beskeden, det andet element er 
-   adressen til klientens socket (gemt i en ny tuple)'''
+taeller = 0
+klientadressen = ()
+sidsteBeskedTid = time.time()
+forskelITidTOLERANCE = 0.0
+
+''' Modtager beskeder fra klienten. Klientadressen gemmes.
+   recvfrom() returnerer en tuple med to elementer: 
+   [0] beskeden, som gemmes i en mindre tuple  
+   [1] afsenderens sockets adresse (IP + port) '''
 
 def modtag():
-
-    print("Venter på klientens besked i IP-adressen {} ved porten {} ".format(*adressen))
     beskedFraKlienten = serverSocket.recvfrom(bufferStoerrelse)
+    global klientadressen
+    klientadressen = (beskedFraKlienten[1])
     return beskedFraKlienten
 
 
-'''Denne funktion laver en handshake. Den bruger funktionen slitBeskeden() til at fordele
-   beskeden i forskellige elementer gemt i en tuple. 
-   Først tjekkes, om klientens besked begynder med com-0 (tælleren er 0 på dette tidspunkt). 
-   a) Hvis beskeden fra klienten er connection request, sendes der et svar til kklienten. 
-   Svaret til klienten skal encodes, dvs. pakkes i binære tal, inden den sendes. 
-   sendTo() har beskeden og adressen til klientens socket som sine parametre. 
-   b ) Hvis beskeden er klientens accept, returnerer metoden true() for 
-   vellykket handshake og while stoppes. 
-   c ) ellers lukkes forbindelsen, fordi handshake ikke lykkedes og klienten 
-   må lave en ny connection request. 
-'''
+
 
 def handshake():
     while (True):
+
+        global sidsteBeskedTid
+        global forskelITidTOLERANCE
+
         beskedFraKlienten = modtag()
         if(beskedFraKlienten):
 
+            '''beskeden splittes: [0] protokoldelen [1] taeller [2] besked'''
             infoTuble = SplitBesked.splitBeskeden(beskedFraKlienten, " ", "C: ");
 
             if(infoTuble[0].__eq__("com") & infoTuble[1].__eq__(str(taeller))):
 
+                '''hvis com-0 IP korrekt, sendes accept til klienten'''
                 if(infoTuble[2].__eq__(serverIP)):
                     svarFraServeren = "com-" + str(taeller) + " accept " + serverIP
                     print("S: " + svarFraServeren)
                     beskedTilKlient = str.encode(svarFraServeren)
-                    serverSocket.sendto(beskedTilKlient, infoTuble[3])
+                    serverSocket.sendto(beskedTilKlient, klientadressen)
 
+                '''hvis com-0 accept, etableres forbindelsen'''
                 if (infoTuble[2].__eq__("accept")):
                     print("Klienten har accepteret og forbindelsen er etableret")
+
+                    '''Handshake logges, a = append'''
+                    f = open("Scripts\log", "a")
+                    nu = time.ctime(time.time())
+                    f.write("handshake " + str(nu) + "\n")
+                    f.close()
+
+
+                    '''tiden for TOlERANCE opdateres'''
+                    forskelITidTOLERANCE = time.time() - sidsteBeskedTid
+                    sidsteBeskedTid = time.time()
+
                     return True
                     break
             else:
                 print("S: Fejl i handshake")
                 svarTilMsg = "FEJL"
                 sendTilKlient = str.encode(svarTilMsg)
-                serverSocket.sendto(sendTilKlient, infoTuble[3])
+                serverSocket.sendto(sendTilKlient, klientadressen)
 
+                '''Når klienten har lukket, lukkes serveren også'''
                 if (ConnectionError):
                     serverSocket.close()
                     sys.exit(0)
 
-'''
-   Denne funktion håndterer beskeder, som klienten sender (efter handshake). 
-   Funktionen splitBeskeden() splitter den modtagne besked ad. 
-   Den returner en tuple, hvor de forskellige elementer i beskeden er gemt. 
-   Hvis beskeden begynder med msg og dens indeksering matcher med taeller (som 
-   hele tiden opdateres i takt med at der kommer beskeder), returnerer funktionen True. 
-   Ellers False.
-   Det er funktionen svarTilsMsg(), som kalder på modtageBeskeder() og sender et svar. 
-'''
+'''Klientens besked behandles.'''
+def behandlBeskeder():
+        starttid = time.time()
+        maxTaeller = 0;
+        conResSendt = False
+        global sidsteBeskedTid
+        global forskelITidTOLERANCE
 
-def modTageBeskeder():
         while (True):
-            beskedFraKlienten = modtag()
 
-            if (beskedFraKlienten):
-                infoTuble = SplitBesked.splitBeskeden(beskedFraKlienten, "=", "C: ");
+                beskedFraKlienten = modtag()
 
-                if (infoTuble[0].__eq__("msg") & infoTuble[1].__eq__(str(taeller))):
-                    svarTilMsg(True, infoTuble[3])
+                '''MAX 25 beskeder per sekund -starttid opdateres ved den første besked'''
+                if (maxTaeller == 0):
+                    starttid = time.time()
 
-                else:
-                    svarTilMsg(False, infoTuble[3])
+                '''MAX 25 beskeder per sekund. For mange, sendes FEJL til klienten'''
+                if(maxTaeller == 25):
+                    elapsed = time.time() - starttid
+                    if (elapsed <  1.0):
+                        print("S: For mange beskeder")
+                        svarTilMsg(2, klientadressen)
 
 
-'''Her sender vi svar til klienten afhængig af, om modtageBeskeder() modtog en 
-   besked, som overholder protokollen eller ej. 
-   Hvis ja) Jeg bruger variabel taeller inde i en funktion, så jeg skal markere den global.
-   Når serveren svarer, skal taeller i svarbeskeden være 1 større end da den modtog beskeden.
-   Så serveren sender et svar, som består af res-(taeller+1)=Jeg er serveren
-   Svaret skal encodes først. 
-   Næste gang når der kommer en besked, skal der svares med indeks, som er 2 større end i dette
-   svar, så jeg tilføjer 2 til taeller, sådan at den hele tiden er opdateret. 
-   Hvis nej) Taeller opdateres ikke og jeg sender besked FEJL til klienten. '''
+                if(beskedFraKlienten):
 
-def svarTilMsg(bool, klientAdresse):
+                    maxTaeller += 1
+                    '''TOLERANCE: tid mellem beskeder udregnes og sidsteBeskedTid opdateres'''
+                    forskelITidTOLERANCE = time.time()-sidsteBeskedTid
+                    sidsteBeskedTid = time.time()
 
-    if(bool == True):
+                    '''Klienten kvitterer max per sekund og forbindelsen lukkes'''
+                    if(beskedFraKlienten[0].decode().__eq__("con-res 0xFF")):
+                        print("C: " + beskedFraKlienten[0].decode())
+                        serverSocket.close()
+                        sys.exit(0)
+                        return
+
+                    elif(beskedFraKlienten[0].decode().__eq__("con-h 0x00")):
+                        '''Serveren modtager heartbeat og sender ok'''
+                        svarTilMsg(3,klientadressen)
+                        print("modtager con-h")
+
+                    else:
+
+                        '''Serveren svarer enten res (1) eller FEJL (2) afhængig af, 
+                           om protokollen er overholdt'''
+                        infoTuble = SplitBesked.splitBeskeden(beskedFraKlienten, "=", "C: ")
+                        if(infoTuble):
+                            if (infoTuble[0].__eq__("msg") and infoTuble[1].__eq__(str(taeller))):
+                                svarTilMsg(1, klientadressen)
+                            else:
+                                svarTilMsg(2, klientadressen)
+
+
+'''svaret til klienten sendes, efter at beskeden fra klienten er behandlet
+i den forrige funktion'''
+def svarTilMsg(valg, klientAdresse):
+
+    if(valg==1):
+        '''protokollen er overholdt, så res til klienten. 
+        Taeller opdateres med 2 til næste omgang.'''
         global taeller;
         svarTilMsg = "res-" + str(taeller+1) + "=Jeg er serveren"
         sendTilKlient = str.encode(svarTilMsg)
         taeller = taeller + 2
         serverSocket.sendto(sendTilKlient, klientAdresse);
 
-    else:
-
-        print("S: Fejl i beskeden")
+    if(valg ==2):
+        '''protokollen er ikke overholdt, så FEJL til klienten'''
+        print("S: Fejl")
         svarTilMsg = "FEJL"
         sendTilKlient = str.encode(svarTilMsg)
         serverSocket.sendto(sendTilKlient, klientAdresse)
 
+        '''Når klienten har lukket, lukkes serveren også'''
         if (ConnectionError):
             serverSocket.close()
             sys.exit(0)
 
-'''
-   Her kalder jeg på funktionerne, dvs. hvis handshake er
-   gået vel, begynder serveren at modtage beskeder fra klienten'''
+    if(valg == 3):
+        '''Serveren anderkender heartbeat'''
+        svarTilMsg = "okhb"
+        sendTilKlient = str.encode(svarTilMsg)
+        serverSocket.sendto(sendTilKlient, klientAdresse)
 
 
-if(handshake()):
-   modTageBeskeder()
+
+'''Undersøger hvert 4.sekund, om der er sket noget siden sidst. 
+    Er der blevet sendt beskeder, sover den bare igen.
+    Hvis der ikke er sket noget, skal tolerance træde i kraft.'''
+
+def checkTolerance():
+
+        global forskelITidTOLERANCE
+        global sidsteBeskedTid
+        global klientadressen
+        conResIkkeSendt = True
+        sidsteForskelMlBeskeder = 0.0
+
+        while(conResIkkeSendt):
+            try:
+                time.sleep(4)
+
+                if(sidsteForskelMlBeskeder == forskelITidTOLERANCE):
+                    '''Der er ikke sket noget siden sidst. ForskelITid udregnes igen.
+                    Forskellen udregnes ikke i handshake, så hvis forskellen er 0.0 siden sidst, 
+                    er det fordi vi er lige kommet ud af handshake. 
+                    Så begynder vi at udregne både sidsteBeskedTid og forskel.  
+                    Ellers er forskellen blevet over 4 og vi går til næste punkt.'''
+
+                    forskelITidTOLERANCE = time.time() - sidsteBeskedTid
+                    sidsteBeskedTid = time.time()
+
+                if (forskelITidTOLERANCE > 4 and conResIkkeSendt == True and klientadressen != ()):
+                    '''lukning sendes kun en gang og hvis handshake er udført, dvs. der er klientadressen'''
+
+                    print("S: con-res 0xFE. Tidsforskel: " + str(forskelITidTOLERANCE))
+                    sendTilKlienten = str.encode("con-res 0xFE")
+                    serverSocket.sendto(sendTilKlienten, klientadressen)
+                    conResIkkeSendt = False
+                    return
+
+            except OSError as e:
+                print("Programmet afsluttes")
+                serverSocket.close()
+                sys.exit(1)
+
+            '''Opdateres for at tjekke, om der er sket noget siden'''
+            sidsteForskelMlBeskeder = forskelITidTOLERANCE
+
+
+
+
+'''Serveren kører i to tråde: main og tolerance.'''
+def udfoerMain():
+    print("Venter på klientens besked i IP-adressen {} ved porten {} ".format(*adressen))
+    if (handshake()):
+        behandlBeskeder()
+
+if __name__ == '__main__':
+    server = Thread(target = udfoerMain).start()
+    tolerance = Thread(target=checkTolerance).start()
+
+
+
+
+
+
+
 
 
 
