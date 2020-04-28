@@ -201,7 +201,7 @@ def checkTolerance():
                 if (forskelITidTOLERANCE > 4 and conResIkkeSendt == True and klientadressen != ()):
                     '''lukning sendes kun en gang og hvis handshake er udført, dvs. der er klientadressen'''
 
-                    print("S: con-res 0xFE. Tidsforskel: " + str(forskelITidTOLERANCE))
+                    print("S: con-res 0xFE")
                     sendTilKlienten = str.encode("con-res 0xFE")
                     serverSocket.sendto(sendTilKlienten, klientadressen)
                     conResIkkeSendt = False
